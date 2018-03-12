@@ -21,6 +21,24 @@
 #include "powerhal_utils.h"
 #include "powerhal.h"
 
+#define TOTAL_CPUS 4
+#define LOW_POWER_MAX_FREQ "620000"
+#define LOW_POWER_MIN_FREQ "204000"
+#define NORMAL_MIN_FREQ "204000"
+#define NORMAL_MAX_FREQ "1300000"
+
+static char *cpu_path_min[] = {
+    "/sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq",
+};
+
+static char *cpu_path_max[] = {
+    "/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq",
+};
+
+static bool freq_set[TOTAL_CPUS];
+static bool low_power_mode = false;
+static pthread_mutex_t low_power_mode_lock = PTHREAD_MUTEX_INITIALIZER;
+
 static int get_input_count(void)
 {
     int i = 0;
@@ -237,8 +255,19 @@ void common_power_set_interactive(__attribute__ ((unused)) struct power_module *
     ALOGI("Setting low power cluster %s", lp_state);
 
     if (on) {
-        sysfs_write("/sys/devices/system/cpu/cpufreq/intelliactive/boostpulse", state);
         ALOGI("Setting boost %s", state);
+        sysfs_write("/sys/devices/system/cpu/cpufreq/intelliactive/boostpulse", state);
+        ALOGI("Screen is on, setting aggressive values for intelliactive governor");
+        sysfs_write_int("/sys/devices/system/cpu/cpufreq/intelliactive/boostpulse", 1);
+        sysfs_write_int("/sys/devices/system/cpu/cpufreq/intelliactive/io_is_busy", 1);
+        sysfs_write(cpu_path_min[0], NORMAL_MIN_FREQ);
+        sysfs_write(cpu_path_max[0], NORMAL_MAX_FREQ);
+    } else {
+        ALOGI("Screen is off, setting relaxed values for intelliactive governor");
+        sysfs_write_int("/sys/devices/system/cpu/cpufreq/intelliactive/boostpulse", 0);
+        sysfs_write_int("/sys/devices/system/cpu/cpufreq/intelliactive/io_is_busy", 0);
+        sysfs_write(cpu_path_min[0], LOW_POWER_MIN_FREQ);
+        sysfs_write(cpu_path_max[0], LOW_POWER_MAX_FREQ);
     }
 
     if (0 != pInfo) {
@@ -270,12 +299,8 @@ void common_power_set_interactive(__attribute__ ((unused)) struct power_module *
         ALOGD("Display mode is currently %s", mode);
         if ( strncmp(mode,"offline",7) == 0 ) {
             ALOGI("Screen is off, setting relaxed values for intelliactive governor");
-            sysfs_write_int("/sys/devices/system/cpu/cpufreq/intelliactive/boostpulse", 0);
-            sysfs_write_int("/sys/devices/system/cpu/cpufreq/intelliactive/io_is_busy", 0);
         } else {
             ALOGI("Screen is on, setting aggressive values for intelliactive governor");
-            sysfs_write_int("/sys/devices/system/cpu/cpufreq/intelliactive/boostpulse", 1);
-            sysfs_write_int("/sys/devices/system/cpu/cpufreq/intelliactive/io_is_busy", 1);
         }
     }
 
@@ -284,6 +309,7 @@ void common_power_set_interactive(__attribute__ ((unused)) struct power_module *
 void common_power_hint(__attribute__ ((unused)) struct power_module *module,
         struct powerhal_info *pInfo, power_hint_t hint, __attribute__ ((unused)) void *data)
 {
+    int len, cpu, ret;
     uint64_t t;
 
     if (!pInfo)
@@ -296,22 +322,27 @@ void common_power_hint(__attribute__ ((unused)) struct power_module *module,
     case POWER_HINT_VSYNC:
         break;
     case POWER_HINT_INTERACTION:
+        ALOGI("POWER_HINT_INTERACTION: triggering boostpulse");
+        pthread_mutex_lock(&low_power_mode_lock);
+        sysfs_write_int("/sys/devices/system/cpu/cpufreq/intelliactive/boostpulse", 1);
         if (pInfo->ftrace_enable) {
             sysfs_write("/sys/kernel/debug/tracing/trace_marker", "Start POWER_HINT_INTERACTION\n");
         }
-        // Stutters observed during transition animations at lower frequencies
-        pInfo->mTimeoutPoker->requestPmQosTimed("/dev/cpu_freq_min",
-                                                 pInfo->max_frequency,
-                                                 ms2ns(2000));
-        // Keeps a minimum of 2 cores online for 2s
-        pInfo->mTimeoutPoker->requestPmQosTimed("/dev/min_online_cpus",
-                                                 DEFAULT_MIN_ONLINE_CPUS,
-                                                 ms2ns(2000));
+        low_power_mode = false;
+        pthread_mutex_unlock(&low_power_mode_lock);
         break;
-#ifdef ANDROID_API_LP_OR_LATER
-	case POWER_HINT_LOW_POWER:
-	break;
-#endif
+    case POWER_HINT_LOW_POWER:
+        //ALOGI("POWER_HINT_LOW_POWER: setting LOW_POWER_MIN/MAX_FREQ");
+        //pthread_mutex_lock(&low_power_mode_lock);
+	//common_power_set_interactive(module, pInfo, 0);
+        //if (pInfo->ftrace_enable) {
+        //    sysfs_write("/sys/kernel/debug/tracing/trace_marker", "Start POWER_HINT_LOW_POWER\n");
+        //}
+        //low_power_mode = true;
+        //sysfs_write(cpu_path_min[0], LOW_POWER_MIN_FREQ);
+        //sysfs_write(cpu_path_max[0], LOW_POWER_MAX_FREQ);
+        //pthread_mutex_unlock(&low_power_mode_lock);
+        break;
     default:
         ALOGE("Unknown power hint: 0x%x", hint);
         break;
