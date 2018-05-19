@@ -63,3 +63,6 @@ persist.service.adb.enable=1
 persist.sys.usb.config=mtp,adb
 
 ro.opa.eligible_device=true
+
+# Charles-IV OTA server
+cm.updater.uri=https://charles-iv.serveo.net/api/v1/{device}/{type}/{incr}
