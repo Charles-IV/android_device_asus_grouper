@@ -64,5 +64,3 @@ persist.sys.usb.config=mtp,adb
 
 ro.opa.eligible_device=true
 
-# Charles-IV OTA server
-cm.updater.uri=https://ota.charles-iv.uk/api/v1/{device}/{type}/{incr}
